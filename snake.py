@@ -11,23 +11,27 @@ from collections import deque
 import time
 from enum import IntEnum
 
-T = 1
+T = 0.15
 
 def clear_screen():
     print '\033[2J\033[H'
-
-def add_border(rect):
-    R = rect.split("\n")
-    W = max(map(len, R))
-    H_border = "+" + "-"*W + "+"
-    s = H_border + "\n|" + rect.replace("\n", "|\n|") + "|\n" + H_border + "\n"
-    return s
 
 class Direction(IntEnum):
     UP = 1
     DOWN = 2
     LEFT = 3
     RIGHT = 4
+
+key_dir_map = {
+    "h": Direction.LEFT,
+    "j": Direction.DOWN,
+    "k": Direction.UP,
+    "l": Direction.RIGHT,
+    "a": Direction.LEFT,
+    "s": Direction.DOWN,
+    "w": Direction.UP,
+    "d": Direction.RIGHT,
+}
 
 class Game():
     def __init__(self):
@@ -53,7 +57,10 @@ class Game():
                 if pos in self.food:
                     s.append("*")
                 elif pos in self.snake:
-                    s.append("@")
+                    if pos == self.snake[-1]:
+                        s.append("\033[1m@\033[0m")
+                    else:
+                        s.append("@")
                 else:
                     s.append(" ")
             if row != self.H-1:
@@ -62,13 +69,13 @@ class Game():
         s = "".join(s)
         return s
 
-    def update(self, inp):
-        key_dir_map = {
-            "h": Direction.LEFT,
-            "j": Direction.DOWN,
-            "k": Direction.UP,
-            "l": Direction.RIGHT,
-        }
+    def bordered_str(self):
+        s = str(self)
+        H_border = "+" + "-"*self.W + "+"
+        s = H_border + "\n|" + s.replace("\n", "|\n|") + "|\n" + H_border + "\n"
+        return s
+
+    def update(self, new_dir):
         opposite = {
             Direction.LEFT:  Direction.RIGHT,
             Direction.DOWN:  Direction.UP,
@@ -76,7 +83,6 @@ class Game():
             Direction.RIGHT: Direction.LEFT,
         }
 
-        new_dir = key_dir_map.get(inp, None)
         if new_dir and new_dir != opposite[self.direction]:
             self.direction = new_dir
 
@@ -107,8 +113,9 @@ class Game():
     def next_food(self):
         try_food = self.snake[-1]
         while (try_food in self.food or try_food in self.snake):
-            try_food = ( random.randint(0, self.H), random.randint(0, self.W) )
+            try_food = ( random.randint(0, self.H-1), random.randint(0, self.W-1) )
 
+        sys.stderr.write(str(try_food) + "\n")
         return try_food
 
 def get_me_out():
@@ -122,39 +129,59 @@ def raw_input_timed(timeout = 10):
     else:
         return None
 
+'''
 orig_fl = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
 fcntl.fcntl(sys.stdin, fcntl.F_SETFL, orig_fl | os.O_NONBLOCK)
+'''
 
-game = Game()
+old_settings = None
 
-counter = 0
-while not game.over:
-    clear_screen()
-    print counter
-    print add_border(str(game))
+def save_tty_settings():
+    global old_settings
+    old_settings = termios.tcgetattr(sys.stdin)
 
-    time.sleep(T)
-    inp = None
-    try:
-	inp = sys.stdin.read(1)
-    except IOError:
-        pass
-    print inp
-    time.sleep(1)
+def prepare_tty():
+    global old_settings
+    settings = old_settings[:]
+    settings[3] = settings[3] & ~(termios.ECHO | termios.ICANON)
+    termios.tcsetattr(sys.stdin, termios.TCSANOW, settings)
 
-    if inp:
-        inp = inp.lower()
-    else:
-        dm = {
-                Direction.LEFT:  "h",
-                Direction.DOWN:  "j",
-                Direction.UP:    "k",
-                Direction.RIGHT: "l",
-        }
-        inp = dm[game.direction]
+def restore_tty_settings():
+    global old_settings
+    termios.tcsetattr(sys.stdin, termios.TCSANOW, old_settings)
 
-    game.update(inp)
+def main():
+    game = Game()
 
-    counter += 1
+    counter = 0
+    while not game.over:
+        clear_screen()
+        print counter
+        print game.bordered_str()
 
-print "GAME OVER!!"
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        time.sleep(T)
+        inp = None
+        try:
+            inp = sys.stdin.read(1)
+        except IOError:
+            pass
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+
+        new_dir = game.direction
+        if inp:
+            inp = inp.lower()
+            new_dir = key_dir_map[inp]
+
+        game.update(new_dir)
+
+        counter += 1
+
+    print "GAME OVER!!"
+
+try:
+    save_tty_settings()
+    prepare_tty()
+    main()
+finally:
+    restore_tty_settings()
